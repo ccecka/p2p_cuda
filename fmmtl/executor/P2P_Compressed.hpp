@@ -101,6 +101,7 @@ class P2P_Compressed {
       if (target2sources[i_begin].empty())
         target_ranges.push_back(upair(i_begin, i_end));
 
+      // Record this source range with this target range
       target2sources[i_begin].push_back(upair(j_begin,j_end));
     }
 
