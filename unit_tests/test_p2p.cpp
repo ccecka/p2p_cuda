@@ -8,7 +8,6 @@
 #include "Stokes.kern"
 
 #include "fmmtl/executor/P2P.hpp"
-#include "Math.hpp"
 
 #include <vector>
 #include <set>
