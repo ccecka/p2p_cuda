@@ -10,6 +10,53 @@
 #include "P2P_Compressed.hpp"
 #include "fmmtl/config.hpp"
 
+// A quick class to time gpu kernels using device events
+struct StopWatch {
+  cudaEvent_t startTime, stopTime;
+  StopWatch()  { cudaEventCreate(&startTime); cudaEventCreate(&stopTime); }
+  ~StopWatch() { cudaEventDestroy(startTime); cudaEventDestroy(stopTime); }
+  inline void start() { cudaEventRecord(startTime,0); }
+  inline double stop() { return elapsed(); }
+  inline double elapsed() {
+    cudaEventRecord(stopTime,0);
+    cudaEventSynchronize(stopTime);
+    float result;
+    cudaEventElapsedTime(&result, startTime, stopTime);
+    return result/1000.0;    // 1000 mSec per Sec
+  }
+};
+
+inline int cudaInit(int device = 0) {
+  StopWatch initTimer;
+
+  int count;
+  cudaGetDeviceCount(&count);
+  if (count == 0) {
+    std::cerr << "Error: No devices supporting CUDA" << std::endl;
+    exit(1);
+  }
+
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, device);
+  if (prop.major < 1) {
+    std::cerr << "Error: " << prop.name << " doesn't support CUDA." << std::endl;
+    exit(1);
+  }
+
+  device = min(count-1, max(0, device));
+  cudaSetDevice(device);
+  std::cerr << "Initializing " << prop.name << "... ";
+
+  int* temp;
+  cudaMalloc((void**)&temp, sizeof(int));
+  FMMTL_CUDA_CHECK;
+  cudaFree(temp);
+
+  std::cerr << initTimer.stop() << "s" << std::endl << std::endl;
+  return 1;
+}
+
+
 template <typename Container>
 inline typename Container::value_type* gpu_copy(const Container& c) {
   typedef typename Container::value_type c_value;
@@ -103,6 +150,7 @@ struct Data {
 template <typename Kernel>
 P2P_Compressed<Kernel>::P2P_Compressed()
     : data_(0) {
+  cudaInit();
 }
 
 template <typename Kernel>
@@ -118,6 +166,7 @@ P2P_Compressed<Kernel>::P2P_Compressed(
       source_ranges_(gpu_copy(source_ranges)),
       sources_(gpu_copy(sources)),
       targets_(gpu_copy(targets)) {
+  cudaInit();
 }
 
 template <typename Kernel>
@@ -195,7 +244,6 @@ class block_range
   }
 };
 
-// XXX: Untested!!
 template <typename Kernel>
 void
 P2P_Compressed<Kernel>::execute(const Kernel& K,
@@ -203,6 +251,8 @@ P2P_Compressed<Kernel>::execute(const Kernel& K,
                                 const std::vector<charge_type>& c,
                                 const std::vector<target_type>& t,
                                 std::vector<result_type>& r) {
+  cudaInit();
+
   typedef Kernel kernel_type;
   typedef typename kernel_type::source_type source_type;
   typedef typename kernel_type::target_type target_type;
