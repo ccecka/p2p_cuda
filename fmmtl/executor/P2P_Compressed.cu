@@ -28,6 +28,7 @@ struct StopWatch {
 
 inline int cudaInit(int device = 0) {
   StopWatch initTimer;
+  initTimer.start();
 
   int count;
   cudaGetDeviceCount(&count);
