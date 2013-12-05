@@ -1,5 +1,3 @@
-// With mods by Brian
-
 #include <thrust/device_ptr.h>
 #include <thrust/device_malloc.h>
 #include <thrust/device_vector.h>
@@ -13,9 +11,6 @@
 
 
 #define THRDS_PER_BLK 256
-// This function has been altered to conform to the use of shared memory and as such,
-// no longer offers a valid baseline comparison without using shared memory.
-//#define TEST_SMEM 1
 
 // A quick class to time gpu kernels using device events
 struct StopWatch {
@@ -114,10 +109,8 @@ blocked_p2p(Kernel K,  // The Kernel to apply
 	RandomAccessIterator3 sr_first = source_range + source_range_ptr[blockIdx.x+0];
 	RandomAccessIterator3 sr_last  = source_range + source_range_ptr[blockIdx.x+1];
 
-//#ifdef TEST_SMEM
 	__shared__ source_type so_sh[THRDS_PER_BLK];
 	__shared__ charge_type ch_sh[THRDS_PER_BLK];
-//#endif
 
 	// Parallel for each target until the last.
 	// If at least one thread has a valid target this iteration, all threads get in. This is
@@ -182,94 +175,6 @@ blocked_p2p(Kernel K,  // The Kernel to apply
 			result[t_current] += r;
 	}
 }
-
-//			if (0 && threadIdx.x < 5) {
-//				printf("block %d thrd %d dim %d s_first %d s_last %d del %d\n",
-//						blockIdx.x, threadIdx.x, blockDim.x, s_first, s_last, s_last-s_first);
-//			}
-//
-//
-//#ifdef TEST_SMEM
-//			if (num_sources > THRDS_PER_BLK) {
-//				printf("ERROR! Threads/block! %d\n", num_sources);
-//				return;
-//			}
-//
-//			// Load the current source range into shared memory
-//			use_smem = true;
-//			if (threadIdx.x < num_sources) {
-//				so_sh[threadIdx.x] = source[s_first+threadIdx.x];
-//				ch_sh[threadIdx.x] = charge[s_first+threadIdx.x];
-//			}
-//			__syncthreads();
-//
-//			// fill smem with sources and charges. each thrd handles a source.
-//			if ((threadIdx.x < num_sources)
-//					&& (num_sources <= THRDS_PER_BLK )) {
-//				use_smem = true;
-//
-//				so_sh[ threadIdx.x ] = source[ s_first+threadIdx.x ];
-//				ch_sh[ threadIdx.x ] = charge[ s_first+threadIdx.x ];
-//
-//				if(threadIdx.x == 3 && blockIdx.x == 2) {
-//					printf("cache: block %d thrd %d dim %d s_first %d s_last %d del %d val\n",
-//							blockIdx.x, threadIdx.x, blockDim.x, s_first, s_last,	num_sources);
-//					print_vec(K, so_sh[threadIdx.x]);
-//					print_vec(K, source[s_first + threadIdx.x]);
-//				}
-//			}
-//			__syncthreads();
-//#endif
-//
-//			// Filter out any threads that might've been useful for populating shared memory, but have valid target to compute a result for.
-//			if (t_current < t_last) {
-//				// For each source in the source range
-//				for (unsigned s_current = s_first; s_current < s_last; ++s_current) {
-//#ifndef TEST_SMEM
-//					const source_type s = source[s_current];
-//					const charge_type c = charge[s_current];
-//#else
-//					if (use_smem) {
-//						const source_type s = so_sh[s_current - s_first];
-//						const charge_type c = ch_sh[s_current - s_first];
-//
-//						if(threadIdx.x == 3 && blockIdx.x == 2) {
-//							printf("use: block %d thrd %d dim %d s_current %d s_last %d idx %d val\n",
-//									blockIdx.x, threadIdx.x, blockDim.x, s_current, s_last,
-//									s_current - s_first);
-//							print_vec(K, s);
-//							print_vec(K, source[s_current]);
-//						}
-//
-//						if (s != source[s_current])
-//							printf("ERROR: %d %d\n", blockIdx.x, threadIdx.x);
-//
-//						r += K(t,s) * c;
-//					} else { // use global mem
-//						const source_type s = source[s_current];
-//						const charge_type c = charge[s_current];
-//						r += K(t,s) * c;
-//					}
-//#endif
-//#ifndef TEST_SMEM
-//					r += K(t,s) * c;
-//#endif
-//				} // for each source
-//			}
-//			++sr_first;
-//
-//#ifdef TEST_SMEM
-//			use_smem = false;
-//			__syncthreads();
-//#endif
-//		} while(sr_first < sr_last);
-//
-//		// Assign the result
-//		if (t_current < t_last)
-//			result[t_current] += r;
-//	}
-//}
-
 
 struct Data {
 	unsigned num_sources;
