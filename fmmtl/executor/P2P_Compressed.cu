@@ -22,7 +22,10 @@ __device__ void print_vec(const Kernel&, const Vec<3,T>& v) {
 /******/
 
 #define THRDS_PER_BLK 256
-#define TEST_SMEM 1
+// This function has been altered to conform to the use of shared memory and as such,
+// no longer offers a valid baseline comparison without using shared memory.
+//#define TEST_SMEM 1
+
 template <typename Container>
 inline typename Container::value_type* gpu_copy(const Container& c) {
 	typedef typename Container::value_type c_value;
@@ -72,23 +75,24 @@ blocked_p2p(Kernel K,  // The Kernel to apply
 	RandomAccessIterator3 sr_first = source_range + source_range_ptr[blockIdx.x+0];
 	RandomAccessIterator3 sr_last  = source_range + source_range_ptr[blockIdx.x+1];
 
-#ifdef TEST_SMEM
-	bool use_smem;
+//#ifdef TEST_SMEM
 	__shared__ source_type so_sh[THRDS_PER_BLK];
 	__shared__ charge_type ch_sh[THRDS_PER_BLK];
-#endif
+//#endif
 
 	// Parallel for each target until the last.
-	// If at least one thread has a valid target this iteration, all threads get in.
-	for (unsigned i = 0; blockDim.x*(i) <= num_targets; i++) {
-		const unsigned t_current = t_first + threadIdx.x + blockDim.x*(i);
+	// If at least one thread has a valid target this iteration, all threads get in. This is
+  // so we ensure that all threads are available for use in populating shared memory.
+	for (unsigned t_base = t_first; t_base < t_last; t_base += blockDim.x) {
+		const unsigned t_current = t_base + threadIdx.x;
 
 		target_type t;
-		// Get used to seeing this guard...
-		if (t_current < t_last)
+    result_type r;
+		// This guard is necessary since we've allowed all threads into the loop. Get used to seeing it...
+		if (t_current < t_last) {
 			t = target[t_current];
-
-		result_type r = result_type();
+      r = result_type();
+    }
 
 		// For each source range (there must be at least one)
 		do {
@@ -99,12 +103,12 @@ blocked_p2p(Kernel K,  // The Kernel to apply
 			const unsigned num_sources = s_last - s_first;
 
 			// Loop over sources in this range (which could potentially outnumber threads) block by block.
-			// Model this loop as above to ease future inversion of the two.
-			for (unsigned j = 0; blockDim.x*(j) <= num_sources; j++) {
-				const unsigned s_base = s_first + blockDim.x*(j);
+			// Model this loop as above to ensure enough threads are available for all valid targets and
+      // to ease future inversion of the two loops.
+			for (unsigned s_base = s_first; s_base < s_last; s_base += blockDim.x) {
 				const unsigned s_current = s_base + threadIdx.x;
 
-				__syncthreads();
+				__syncthreads(); // Ensure the last iteration has been completed by all warps before altering the data
 				// Load a chunk of source data into shared memory
 				if (s_current < s_last) {
 					so_sh[threadIdx.x] = source[s_current];
@@ -117,6 +121,7 @@ blocked_p2p(Kernel K,  // The Kernel to apply
 					// Calculate a partial result based on the charges and sources in shared memory
 					for (unsigned k = 0; k < THRDS_PER_BLK; k++) {
 						// What a shitty, unimaginative variable name... Oh, well!
+            // TODO: Opportunity to decrease potential bank conflicts here using modulo offsetted indexing
 						const unsigned s_current2 = s_base + k;
 
 						// If we're not out of bounds, do the calculation
