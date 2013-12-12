@@ -1,13 +1,14 @@
-#include "KernelSkeleton.kern"
-#include "UnitKernel.kern"
-#include "ExpKernel.kern"
+//#include "KernelSkeleton.kern"
+//#include "UnitKernel.kern"
+//#include "ExpKernel.kern"
 
 #include "Laplace.kern"
-#include "Yukawa.kern"
-#include "Helmholtz.kern"
-#include "Stokes.kern"
+//#include "Yukawa.kern"
+//#include "Helmholtz.kern"
+//#include "Stokes.kern"
 
 #include "fmmtl/executor/P2P.hpp"
+#include "fmmtl/config.hpp"
 
 #include <vector>
 #include <set>
@@ -82,9 +83,9 @@ int main(int argc, char** argv) {
   (void) argc;
   (void) argv;
 
-  unsigned N = 10000;           // N rows (# targets)
-  unsigned M = 10000;           // M cols (# sources)
-  unsigned range_size = 256;    // Maximum block size
+  unsigned N = 50000;           // N rows (# targets)
+  unsigned M = N;           // M cols (# sources)
+  unsigned range_size = THR_PER_BLK;    // Maximum block size
 
   // Define the Kernel function we'll be testing
   typedef LaplaceKernel kernel_type;
@@ -96,6 +97,9 @@ int main(int argc, char** argv) {
   typedef typename kernel_type::charge_type charge_type;
   typedef typename kernel_type::target_type target_type;
   typedef typename kernel_type::result_type result_type;
+
+  // Profiler needs to execute multiple times on the same data. Seed a constant value so we have "deterministically randomized" vectors
+  srand(0);
 
   // Create a vector of sources
   std::vector<source_type> s(M);
@@ -118,9 +122,15 @@ int main(int argc, char** argv) {
   std::vector<result_type> r_cpu(N);
 
   // Compute the full P2P on the CPU.
-  P2P::block_eval(K,
+  // N > 25000 takes a long time to run, so temporarily skip it.
+  if (N <= 25000) {
+
+    P2P::block_eval(K,
                   s.begin(), s.end(), c.begin(),
                   t.begin(), t.end(), r_cpu.begin());
+  } else {
+    std::cout << "SKIPPING CPU RUN FOR LARGE N,M" << std::endl;
+  }
 
 #if defined(FMMTL_DEBUG)
   std::cout << "CPU:" << std::endl;

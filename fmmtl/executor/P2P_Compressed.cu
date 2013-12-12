@@ -18,8 +18,6 @@
 #include "fmmtl/config.hpp"
 
 
-#define THR_PER_BLK 256
-
 // A quick class to time gpu kernels using device events
 struct StopWatch {
   cudaEvent_t startTime, stopTime;
@@ -86,21 +84,21 @@ inline void gpu_free(T* p) {
 }
 
 template <typename Kernel,
-  typename RandomAccessIterator1,  // pair<uint,uint>
-  typename RandomAccessIterator2,  // Chained uint
-  typename RandomAccessIterator3>  // pair<uint,uint>
-  __global__ void
-  blocked_p2p(Kernel K,  // The Kernel to apply
-	      // BlockIdx -> pair<uint,uint> target range
-	      RandomAccessIterator1 target_range,
-	      // BlockIdx,BlockIdx+1 -> pair<uint,uint> into source_range
-	      RandomAccessIterator2 source_range_ptr,
-	      // Idx -> pair<uint,uint> source range
-	      RandomAccessIterator3 source_range,
-	      const typename Kernel::source_type* source,
-	      const typename Kernel::charge_type* charge,
-	      const typename Kernel::target_type* target,
-	      typename Kernel::result_type* result) {
+    typename RandomAccessIterator1,  // pair<uint,uint>
+    typename RandomAccessIterator2,  // Chained uint
+    typename RandomAccessIterator3>  // pair<uint,uint>
+__global__ void
+blocked_p2p(Kernel K,  // The Kernel to apply
+    // BlockIdx -> pair<uint,uint> target range
+    RandomAccessIterator1 target_range,
+    // BlockIdx,BlockIdx+1 -> pair<uint,uint> into source_range
+    RandomAccessIterator2 source_range_ptr,
+    // Idx -> pair<uint,uint> source range
+    RandomAccessIterator3 source_range,
+    const typename Kernel::source_type* source,
+    const typename Kernel::charge_type* charge,
+    const typename Kernel::target_type* target,
+    typename Kernel::result_type* result) {
   typedef Kernel kernel_type;
   typedef typename kernel_type::source_type source_type;
   typedef typename kernel_type::charge_type charge_type;
@@ -111,7 +109,6 @@ template <typename Kernel,
   const thrust::pair<unsigned,unsigned> t_range = target_range[blockIdx.x];
   const unsigned t_first = t_range.first;
   const unsigned t_last  = t_range.second;
-  const unsigned num_targets = t_last-t_first;
 
   // Get the range of source ranges this block is responsible for
   RandomAccessIterator3 sr_first = source_range + source_range_ptr[blockIdx.x+0];
@@ -129,8 +126,8 @@ template <typename Kernel,
 
     target_type t;
     result_type r;
-    // This guard is necessary since we've allowed all threads into the 
-    // loop. 
+    // This guard is necessary since we've allowed all threads into the
+    // loop.
     if (t_current < t_last) {
       t = target[t_current];
       r = result_type();
@@ -142,44 +139,55 @@ template <typename Kernel,
       const thrust::pair<unsigned,unsigned> s_range = *sr_first;
       const unsigned s_first = s_range.first;
       const unsigned s_last  = s_range.second;
-      const unsigned num_sources = s_last - s_first;
 
-      // Loop over sources in this range (which could potentially 
+      // Loop over sources in this range (which could potentially
       // outnumber threads) block by block.
-      // Model this loop as above to ensure enough threads are available 
+      // Model this loop as above to ensure enough threads are available
       // for all valid targets and to ease future inversion of the two loops.
       for (unsigned s_base = s_first; s_base < s_last; s_base += blockDim.x) {
-	const unsigned s_current = s_base + threadIdx.x;
+        const unsigned s_current = s_base + threadIdx.x;
 
-	// Ensure the last iteration has been completed by all warps 
-	// before altering the data
-	__syncthreads(); 
-	// Load a chunk of source data into shared memory
-	if (s_current < s_last) {
-	  so_sh[threadIdx.x] = source[s_current];
-	  ch_sh[threadIdx.x] = charge[s_current];
-	}
-	__syncthreads();
+        // Ensure the last iteration has been completed by all warps
+        // before altering the data
+        __syncthreads();
+        // Load a chunk of source data into shared memory
+        if (s_current < s_last) {
+          so_sh[threadIdx.x] = source[s_current];
+          ch_sh[threadIdx.x] = charge[s_current];
+        }
+        __syncthreads();
 
-	// Filter out any threads that might've been useful for populating 
-	// shared memory, but have no valid target to compute a result for.
-	if (t_current < t_last) {
-	  // Calculate a partial result based on the charges and sources 
-	  // in shared memory.
-	  for (unsigned k = 0; k < THR_PER_BLK; k++) {
-            // TODO: Opportunity to decrease potential bank conflicts 
-	    // here using modulo offsetted indexing
-	    const unsigned s_current2 = s_base + k;
+        // Filter out any threads that might've been useful for populating
+        // shared memory, but have no valid target to compute a result for.
+        // Should only cause one warp at most to diverge.
+        if (t_current < t_last) {
+          // Calculate a partial result based on the charges and sources
+          // in shared memory.
+          const unsigned smem_elements = s_last-s_base < THR_PER_BLK ? s_last-s_base : THR_PER_BLK;
+          for (unsigned k = 0; k < smem_elements; k++) {
 
-	    // If we're not out of bounds, do the calculation
-	    if (s_current2 < s_last) {
-	      const source_type s = so_sh[k];
-	      const charge_type c = ch_sh[k];
+//#define BANK_INTERLEAVE // This actually increases the number of bank conflicts and slows us down
+#ifdef BANK_INTERLEAVE
+            const unsigned k_offsetted = (k + threadIdx.x) % THR_PER_BLK;
+            const unsigned s_current2 = s_base + k_offsetted;
+#else    
+            const unsigned s_current2 = s_base + k;
+#endif
 
-	      r += K(t,s) * c;
-	    }
-	  }
-	}
+            // If we're not out of bounds, do the calculation
+            if (s_current2 < s_last) {
+
+#ifdef BANK_INTERLEAVE
+              const source_type s = so_sh[k_offsetted];
+              const charge_type c = ch_sh[k_offsetted];
+#else
+              const source_type s = so_sh[k];
+              const charge_type c = ch_sh[k];
+#endif
+              r += K(t,s) * c;
+            }
+          }
+        }
       } // Loop over sources by block
 
       ++sr_first;
@@ -196,33 +204,33 @@ struct Data {
   unsigned num_targets;
   unsigned num_threads_per_block;
   unsigned num_blocks;
-Data(unsigned s, unsigned t, unsigned b)
-: num_sources(s),
-    num_targets(t),
-    num_threads_per_block( THR_PER_BLK ),
-    num_blocks(b) {
-}
+  Data(unsigned s, unsigned t, unsigned b)
+      : num_sources(s),
+        num_targets(t),
+        num_threads_per_block( THR_PER_BLK ),
+        num_blocks(b) {
+  }
 };
 
 template <typename Kernel>
 P2P_Compressed<Kernel>::P2P_Compressed()
-: data_(0) {
+    : data_(0) {
   cudaInit();
 }
 
 template <typename Kernel>
 P2P_Compressed<Kernel>::P2P_Compressed(
-       std::vector<std::pair<unsigned,unsigned> >& target_ranges,
-       std::vector<unsigned>& source_range_ptrs,
-       std::vector<std::pair<unsigned,unsigned> >& source_ranges,
-       const std::vector<typename Kernel::source_type>& sources,
-       const std::vector<typename Kernel::target_type>& targets)
-: data_(new Data(sources.size(), targets.size(), target_ranges.size())),
-  target_ranges_(gpu_copy(target_ranges)),
-  source_range_ptrs_(gpu_copy(source_range_ptrs)),
-  source_ranges_(gpu_copy(source_ranges)),
-  sources_(gpu_copy(sources)),
-  targets_(gpu_copy(targets)) {
+    std::vector<std::pair<unsigned,unsigned> >& target_ranges,
+    std::vector<unsigned>& source_range_ptrs,
+    std::vector<std::pair<unsigned,unsigned> >& source_ranges,
+    const std::vector<typename Kernel::source_type>& sources,
+    const std::vector<typename Kernel::target_type>& targets)
+    : data_(new Data(sources.size(), targets.size(), target_ranges.size())),
+      target_ranges_(gpu_copy(target_ranges)),
+      source_range_ptrs_(gpu_copy(source_range_ptrs)),
+      source_ranges_(gpu_copy(source_ranges)),
+      sources_(gpu_copy(sources)),
+      targets_(gpu_copy(targets)) {
   cudaInit();
 }
 
@@ -238,9 +246,9 @@ P2P_Compressed<Kernel>::~P2P_Compressed() {
 
 template <typename Kernel>
 void P2P_Compressed<Kernel>::execute(
-     const Kernel& K,
-     const std::vector<typename Kernel::charge_type>& charges,
-     std::vector<typename Kernel::result_type>& results) {
+    const Kernel& K,
+    const std::vector<typename Kernel::charge_type>& charges,
+    std::vector<typename Kernel::result_type>& results) {
   typedef Kernel kernel_type;
   typedef typename kernel_type::source_type source_type;
   typedef typename kernel_type::target_type target_type;
@@ -258,21 +266,21 @@ void P2P_Compressed<Kernel>::execute(
 
 #if defined(FMMTL_DEBUG)
   std::cout << "Launching GPU Kernel: (blocks, threads/block) = ("
-	    << num_blocks << ", " << num_tpb << ")" << std::endl;
+            << num_blocks << ", " << num_tpb << ")" << std::endl;
 #endif
 
   // Launch kernel <<<grid_size, block_size>>>
   blocked_p2p<<<num_blocks,num_tpb>>>(
-				      K,
-				      target_ranges_,
-				      source_range_ptrs_,
-				      source_ranges_,
-				      sources_,
-				      //thrust::raw_pointer_cast(d_charges.data()),
-				      d_charges,
-				      targets_,
-				      d_results);
-  //thrust::raw_pointer_cast(d_results.data()));
+      K,
+      target_ranges_,
+      source_range_ptrs_,
+      source_ranges_,
+      sources_,
+      //thrust::raw_pointer_cast(d_charges.data()),
+      d_charges,
+      targets_,
+      d_results);
+      //thrust::raw_pointer_cast(d_results.data()));
   FMMTL_CUDA_CHECK;
 
   // Copy results back
@@ -287,27 +295,27 @@ void P2P_Compressed<Kernel>::execute(
 /** A functor that maps blockidx -> (target_begin,target_end) */
 template <unsigned BLOCKSIZE>
 class block_range
-: public thrust::unary_function<unsigned,
-  thrust::pair<unsigned,unsigned> > {
+    : public thrust::unary_function<unsigned,
+      thrust::pair<unsigned,unsigned> > {
   unsigned num_targets_;
- public:
+      public:
   __host__ __device__
-    block_range(unsigned num_targets) : num_targets_(num_targets) {}
+  block_range(unsigned num_targets) : num_targets_(num_targets) {}
   __device__
-    thrust::pair<unsigned,unsigned> operator()(unsigned blockidx) const {
+  thrust::pair<unsigned,unsigned> operator()(unsigned blockidx) const {
     unsigned start_block = blockidx * BLOCKSIZE;
     return thrust::make_pair(start_block,
-			     min(start_block + BLOCKSIZE, num_targets_));
+        min(start_block + BLOCKSIZE, num_targets_));
   }
 };
 
 template <typename Kernel>
 void
 P2P_Compressed<Kernel>::execute(const Kernel& K,
-				const std::vector<source_type>& s,
-				const std::vector<charge_type>& c,
-				const std::vector<target_type>& t,
-				std::vector<result_type>& r) {
+    const std::vector<source_type>& s,
+    const std::vector<charge_type>& c,
+    const std::vector<target_type>& t,
+    std::vector<result_type>& r) {
   cudaInit();
   typedef Kernel kernel_type;
   typedef typename kernel_type::source_type source_type;
@@ -331,20 +339,20 @@ P2P_Compressed<Kernel>::execute(const Kernel& K,
 
 #if defined(FMMTL_DEBUG)
   std::cout << "Launching GPU Kernel: (blocks, threads/block) = ("
-	    << num_blocks << ", " << num_tpb << ")" << std::endl;
+      << num_blocks << ", " << num_tpb << ")" << std::endl;
 #endif
 
   // Launch kernel <<<grid_size, block_size>>>
   blocked_p2p<<<num_blocks, num_tpb>>>(
-       K,
-       thrust::make_transform_iterator(thrust::make_counting_iterator(0),
-					       block_range<num_tpb>(t.size())),
-				       thrust::make_constant_iterator(0),
-				       thrust::make_constant_iterator(thrust::make_pair(0,s.size())),
-				       d_sources,
-				       d_charges,
-				       d_targets,
-				       d_results);
+      K,
+      thrust::make_transform_iterator(thrust::make_counting_iterator(0),
+          block_range<num_tpb>(t.size())),
+          thrust::make_constant_iterator(0),
+          thrust::make_constant_iterator(thrust::make_pair(0,s.size())),
+          d_sources,
+          d_charges,
+          d_targets,
+          d_results);
   //thrust::raw_pointer_cast(d_sources.data()),
   //thrust::raw_pointer_cast(d_charges.data()),
   //thrust::raw_pointer_cast(d_targets.data()),

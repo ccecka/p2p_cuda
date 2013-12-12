@@ -1,5 +1,6 @@
 #pragma once
 
+#define THR_PER_BLK 256
 
 #if defined(FMMTL_NO_CUDA)    // Disable CUDA/Thrust acceleration
 
