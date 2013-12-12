@@ -1,3 +1,6 @@
+For details on this project and its development, go to visit
+https://sites.google.com/site/e205brianesmailp2p/
+
 To compile:
 `cd p2p_cuda/unit_tests && make`
 
