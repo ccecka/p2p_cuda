@@ -1,4 +1,4 @@
-For details on this project and its development, go to visit
+For details on this project and its development, visit
 https://sites.google.com/site/e205brianesmailp2p/
 
 To compile:
